@@ -4,13 +4,13 @@ import { MiniConfigRepository } from '../data/source/MiniConfigRepository';
 import { MiniRepository } from '../data/source/MiniRepository';
 import { UpdateManager } from './UpdateManager';
 import AppContext from '@ohos.app.ability.common'
+import { MiniRawFileDataSource } from '../data/source/local/MiniRawFileDataSource';
 
 
 class LocalUpdateManager extends UpdateManager {
   private miniConfigRepository: MiniConfigRepository;
   private miniRepository: MiniRepository;
   private localVersionInfo: LocalVersionInfo
-
   constructor() {
     super()
     this.miniConfigRepository = new MiniConfigRepository();
@@ -27,9 +27,14 @@ class LocalUpdateManager extends UpdateManager {
     this.reset(context)
 
     // 获取本地最新的版本号
-    let lastVersionInfo = this.miniRepository.getLastMiniVersion(context)
-    this.localVersionInfo = lastVersionInfo
-
+    this.localVersionInfo = this.miniRepository.getLastMiniVersion(context)
+    // 本地无内置版本，则迁移RawFile小程序资源到磁盘缓存目录为初始版本
+    if (this.localVersionInfo && this.localVersionInfo?.path=='') {
+      let lastVersionInfo= await this.miniRepository.copyMiniRawToDisk(context)
+      if (lastVersionInfo) {
+        this.localVersionInfo = lastVersionInfo
+      }
+    }
     const miniConfig = await this.miniConfigRepository.fetchMiniConfig(this.localVersionInfo.localVersion)
     // 通知注册的监听者
     this.notifyCheckForUpdate(miniConfig.hasUpdate)
