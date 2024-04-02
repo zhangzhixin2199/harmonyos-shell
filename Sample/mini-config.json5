@@ -1,0 +1,16 @@
+{
+  "root": "spa",//小程序内置rawfile根目录
+  "default": "",
+  "minis":[
+    {
+      "name": "main",
+      "version": "1.0.0",
+      "indexpath": "/spa/main"
+    },
+    {
+      "name": "new",
+      "version": "1.0.0",
+      "indexpath": "/spa/new"
+    }
+  ]
+}
