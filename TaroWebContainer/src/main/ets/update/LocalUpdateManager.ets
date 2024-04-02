@@ -7,6 +7,7 @@ import { UpdateConfig } from '../data/source/bean/UpdateConfig';
 import { wbLogger } from '../utils/Logger';
 import { FileUtils } from '../utils/FileUtils';
 import { GlobalThis } from '../utils/GlobalThis';
+import { ifaa } from '@kit.OnlineAuthenticationKit';
 
 
 class LocalUpdateManager extends UpdateManager {
@@ -19,9 +20,19 @@ class LocalUpdateManager extends UpdateManager {
 
   }
 
-  getLastVersionInfo(name:string) : LocalVersionInfo|null{
-    UpdateConfig.getInstance().getMiniInfo(name);
-    return UpdateConfig.getInstance().getMiniInfo(name);
+  getLastVersionInfo(path:string) : LocalVersionInfo|null{
+    let versionInfo : LocalVersionInfo|null = null
+    if (path) {
+      let name = path.replace(/\//g,'_')
+      let hashmap = UpdateConfig.getInstance().getMiniInfos()
+      hashmap.forEach((value:LocalVersionInfo, key:string)=>{
+        wbLogger.debug('TaroWeb',`value:${value},key:${key}`)
+        if (key && name.startsWith(key)){
+          versionInfo = value
+        }
+      });
+    }
+    return versionInfo
   }
 
   updateMiniOnLaunch(context: AppContext.UIAbilityContext) {

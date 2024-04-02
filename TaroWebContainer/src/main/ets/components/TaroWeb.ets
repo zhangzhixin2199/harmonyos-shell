@@ -132,6 +132,7 @@ export struct TaroWeb {
   handleInternalResource: InterceptRequestHandler = (request) => {
     const url = request.getRequestUrl();
     if (url && url.startsWith('internal:')) {
+      // let json = JSON5
       const responseWeb = new WebResourceResponse();
       const path: string = switchInternalToHapSandBox(url);
       if (File.accessSync(path)) {
@@ -153,13 +154,13 @@ export struct TaroWeb {
 
   useLocalCacheResource: InterceptRequestHandler = (request) => {
     const url = request.getRequestUrl();
+    wbLogger.debug('TaroWeb', 'intercepter url=%{public}s', url)
     if (url && this.useCache && this.webUrlPrefix) {
       // const path: string | undefined = url?.replace(this.webUrlPrefix, '');
       let path: string = url.replace(this.webUrlPrefix, '');
       path = path.split('#')[0]
       wbLogger.debug('TaroWeb', 'intercepter path=%{public}s', path)
-      let biz = MiniRawFileDataSource.getBizByPath(path)//获取业务标识
-      const lastVerInfo = LocalUpdateManagerInstance.getLastVersionInfo(biz)
+      const lastVerInfo = LocalUpdateManagerInstance.getLastVersionInfo(path)
       if (lastVerInfo?.diskCachePath) {// 走本地缓存
         if(!path || !MiniLocalFileDataSource.fileExist(lastVerInfo?.diskCachePath, path)) {
           return null;

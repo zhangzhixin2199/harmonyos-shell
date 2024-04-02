@@ -1,6 +1,7 @@
 import versionCompare from '../bean/CompareVersion'
 import { LocalVersionInfo } from './LocalVersionInfo'
-import HashMap from '@ohos.util.HashMap'
+import { LightWeightMap } from '@kit.ArkTS'
+
 export class UpdateConfig {
   private static instance: UpdateConfig
   private urlFunc = (version: string) => {
@@ -8,7 +9,7 @@ export class UpdateConfig {
   }
   private initialVersion: string = '0'
   private compareVersionFunc: (a: string, b: string) => boolean = versionCompare
-  private minisInfo:HashMap<string,LocalVersionInfo> = new HashMap<string,LocalVersionInfo>()
+  private miniInfos:LightWeightMap<string,LocalVersionInfo> = new LightWeightMap<string,LocalVersionInfo>()
   private constructor() {
   }
 
@@ -39,16 +40,16 @@ export class UpdateConfig {
 
   setOrReplaceMiniInfo(name:string,versionInfo:LocalVersionInfo){
     if (name&&versionInfo) {
-      if (this.minisInfo.hasKey(name)) {
-        this.minisInfo.replace(name, versionInfo);
-      }else{
-        this.minisInfo.set(name,versionInfo)
-      }
+        this.miniInfos.set(name,versionInfo)
     }
   }
 
   getMiniInfo(name:string): LocalVersionInfo | null{
-    return this.minisInfo.get(name)
+    return this.miniInfos.get(name)
+  }
+
+  getMiniInfos(){
+    return this.miniInfos
   }
 
 }
