@@ -1,7 +1,7 @@
 {
-  "hvigorVersion": "4.0.2",
+  "hvigorVersion": "4.2.0",
   "dependencies": {
-    "@ohos/hvigor-ohos-plugin": "4.0.2",
+    "@ohos/hvigor-ohos-plugin": "4.2.0",
     "@babel/core": "^7.17.4",
     "@babel/preset-env": "^7.16.7",
     "@babel/plugin-transform-typescript": "^7.23.6"
