@@ -1,6 +1,7 @@
 import { FrameNode, NodeController } from '@ohos.arkui.node'
-import { TaroHybridCoreInstance, TaroHybridManager } from './TaroHybridManager'
+import { TaroHybridManager } from './TaroHybridManager'
 import { HostPageState } from '../interfaces/HostPageState'
+import { TaroHybridCoreInstance } from './TaroHybridCoreInstance'
 
 @Component
 export struct TaroHybrid {
@@ -55,6 +56,7 @@ class TaroWebNodeController extends NodeController {
 
   onPageHide() {
     this.isPageShow = false
+    this.rebuild();
   }
 
   makeNode(uiContext: UIContext): FrameNode | null {

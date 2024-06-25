@@ -94,6 +94,29 @@ window.MethodChannel = {
       window.MethodChannel.__ArgsMethodStub(object)
     })
   },
+  getPromiseStatus: function (){
+    // 方法调用转换为数据
+    var methodCall = {
+      //修改了名称
+      isAsync: false,
+      // 调用函数名
+      call: `GetPromiseStatus`,
+      arg: {
+        isFun: false,
+        properties: '',
+        funs: '',
+        stubId: -1,
+        objectId: -1,
+      },
+    }
+    // @ts-ignore
+    return window.Channel.nativeCall(window.MethodChannel.ChannelType, methodCall)
+  },
+  unRegisterArgStub: function (argObject: any) {
+    const stubId = this._listenerMap.get(argObject);
+    delete this._stubMap[stubId];
+    this._listenerMap.delete(argObject)
+  },
   jsBridgeMode: function (mode: {
     isAsync: boolean,
     autoRelease?: boolean
@@ -103,26 +126,17 @@ window.MethodChannel = {
       descriptor.value = function (...args: any[]) {
 
         const firstArg = args.length >= 1 ? args[0] : ''
-        const objectId = args.length >= 2 ? args[1] : undefined
 
         let argTypeIsFun = isFunction(firstArg)
         // @ts-ignore
         let stubId = window.MethodChannel.__registerArgStub(firstArg, argTypeIsFun, mode?.autoRelease ?? true)
-        if (argTypeIsFun) {
-          // @ts-ignore
-          if (window.MethodChannel._listenerMap.has(firstArg)) {
-            // @ts-ignore
-            stubId = window.MethodChannel._listenerMap.get(firstArg)
-          } else {
-            // @ts-ignore
-            window.MethodChannel._listenerMap.set(firstArg, stubId)
-          }
-        }
+
+        const isAsync = mode?.isAsync ?? true;
 
         // 方法调用转换为数据
         var methodCall = {
           //修改了名称
-          isAsync: mode?.isAsync ?? true,
+          isAsync:isAsync,
           // 调用函数名
           call: `${className ? className : ''}\$${key.toString()}`,
           arg: {
@@ -130,11 +144,28 @@ window.MethodChannel = {
             properties: firstArg,
             funs: getAllFuns(firstArg),
             stubId: stubId,
-            objectId: objectId,
           },
         }
         // @ts-ignore
-        return window.Channel.nativeCall(window.MethodChannel.ChannelType, methodCall)
+        const result = window.Channel.nativeCall(window.MethodChannel.ChannelType, methodCall)
+
+        if (!isAsync && result === 'Promise_Result') {
+          let count = 0
+          while (count < 20000) {
+            count++
+            if (count % 2000 === 0) {
+              // @ts-ignore
+              const promiseStatus = window.MethodChannel.getPromiseStatus()
+              if (promiseStatus.status === 'pending') {
+                continue
+              }
+              return promiseStatus.result
+            }
+          }
+          return undefined
+        }
+
+        return result
       }
     }
   },
@@ -147,12 +178,19 @@ window.MethodChannel = {
     if (!hasFun) {
       return -1
     }
-    var objectId = this._NextId++
+    // 尝试从map中取出变量id，如果有，直接返回对应id
+    let objectId = this._listenerMap.get(argObject)
+    if (objectId){
+      return objectId
+    }
+    objectId = this._NextId++
     this._stubMap[objectId] = {
       object: argObject,
       isFun: isFun,
       autoRelease: autoRelease
     }
+    // 将变量存储到map中，防止相同变量多次注册
+    this._listenerMap.set(argObject, objectId)
     return objectId
   },
   __ArgsMethodStub: function (nativeArg: any) {
@@ -165,8 +203,12 @@ window.MethodChannel = {
     const {object, isFun, autoRelease} = stub
     if (autoRelease) {
       delete this._stubMap[stubId]
+      delete this._listenerMap[object]
+      this._listenerMap.delete(object)
     } else if (call == 'complete') {
       delete this._stubMap[stubId]
+      delete this._listenerMap[object]
+      this._listenerMap.delete(object)
     }
 
     if (isFun) {

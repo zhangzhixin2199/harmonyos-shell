@@ -3,14 +3,13 @@ import { TaroWebController } from '../components/TaroWeb';
 import { TaroWebContainer } from '../components/TaroWebContainer';
 import { InjectObject } from '../interfaces/InjectObject';
 import { GlobalThis } from '../utils/GlobalThis';
-import { Storage } from '../utils/Storage';
-import { DebugLayout } from './DebugDialog';
 import { TaroHybridManager } from './TaroHybridManager';
 import { TaroHybridUtils } from './TaroHybridUtils';
-import bundleManager from '@ohos.bundle.bundleManager';
-import { wbLogger } from '../utils/Logger';
+import { taroLogger } from '../utils/Logger';
 import { FileUtils } from '../utils/FileUtils';
 import { http } from '@kit.NetworkKit';
+import { DebugTaroWebContainer } from './DebugTaroWebContainer';
+import { taroStorage } from '../inject_adapter/TaroStorage';
 
 export interface TaroHybridCoreBuilderData {
   domain: string
@@ -18,6 +17,7 @@ export interface TaroHybridCoreBuilderData {
   taroPath: string
   taroWebController: TaroWebController
   injectObj: InjectObject
+  forceDarkAccess: boolean
 }
 
 @Builder
@@ -25,7 +25,8 @@ export function TaroHybridCoreBuilder(builderData: TaroHybridCoreBuilderData) {
   TaroHybridCore({
     domain: builderData.domain,
     indexHtmlPath: builderData.indexHtmlPath,
-    taroPath: builderData.taroPath
+    taroPath: builderData.taroPath,
+    forceDarkAccess: builderData.forceDarkAccess
   })
 }
 const HTTP_TIMEOUT = 3000;
@@ -35,23 +36,22 @@ struct TaroHybridCore {
   @Prop indexHtmlPath: string;
   @Prop taroPath: string;
   @Prop domain: string;
+  // 是否强制反色适配深色模式
+  @Prop forceDarkAccess: boolean;
   @State taroWebController: TaroWebController = TaroHybridManager.getCoreInstance(this.indexHtmlPath)?.builderData.taroWebController ?? new TaroWebController()
   @State isDebug: boolean = (GlobalThis.getInstance().getContext('context') as common.UIAbilityContext).applicationInfo.debug
   private useCache: boolean = true
   injectObj: InjectObject = TaroHybridManager.getCoreInstance(this.indexHtmlPath)?.builderData.injectObj ?? {}
   // 构造时保存kvStore实例到GlobalThis中
-  storage: Storage = new Storage(GlobalThis.getInstance().getContext('context') as common.UIAbilityContext,
-    bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT).name)
+  // storage: Storage = new Storage(GlobalThis.getInstance().getContext('context') as common.UIAbilityContext,
+    // bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT).name)
 
-  private devDomain: string = '';
-  private devUseCache: boolean = false;
+  @State devDomain: string = '';
+  @State devUseCache: boolean = false;
   private isRoot: boolean = TaroHybridManager.isRootContainer(this.indexHtmlPath)
 
-  // debugLayout相关
-  private debugLayoutHeight: number = 300;
-  @State debugLayoutVisible: Visibility = Visibility.None
   private navigationBarBackPressed: (taroWebController: TaroWebController)=>void = (taroWebController: TaroWebController)=>{
-    const hasHandled = TaroHybridManager.onBack(taroWebController, this.indexHtmlPath, this.taroPath)
+    const hasHandled = TaroHybridManager.onBack(this.indexHtmlPath, this.taroPath)
     if(!hasHandled) {
       TaroHybridManager.nativeBack()
     }
@@ -62,6 +62,11 @@ struct TaroHybridCore {
       this.devDomain = TaroHybridUtils.getSP(`${this.indexHtmlPath}_devdomain`, '') as string
       this.devUseCache = TaroHybridUtils.getSP(`${this.indexHtmlPath}_useCache`, this.useCache) as boolean
     }
+    taroStorage.pageToAppear(this.indexHtmlPath)
+  }
+
+  aboutToDisappear(): void {
+    taroStorage.pageToDisappear(this.indexHtmlPath)
   }
 
   webUrl(){
@@ -76,7 +81,7 @@ struct TaroHybridCore {
     }
 
     const url = request.getRequestUrl();
-    wbLogger.debug("CrossOrigin","拦截器收到的request: "+url);
+    taroLogger.debug("CrossOrigin","拦截器收到的request: %{public}s", url);
 
     if ( url.search(this.domain) != -1 ) {
       let actualRequestUrl = url.replace(this.domain,this.devDomain)
@@ -87,7 +92,7 @@ struct TaroHybridCore {
       responseWeb.setResponseHeader(request.getRequestHeader())
       responseWeb.setResponseIsReady(false)
       FileUtils.getFileResponseFromUrl(actualRequestUrl,HTTP_TIMEOUT,http.HttpDataType.ARRAY_BUFFER).then(ret => {
-        wbLogger.debug("CrossOrigin", 'download result : %{public}s ,code:%{public}s', actualRequestUrl,`${ret.responseCode}`)
+        taroLogger.debug("CrossOrigin", 'download result : %{public}s ,code:%{public}s', actualRequestUrl,`${ret.responseCode}`)
         responseWeb.setResponseCode(ret.responseCode);
         responseWeb.setReasonMessage(ret.result === http.ResponseCode.OK ? 'OK' : 'http.get resource failed');
         if (ret.result instanceof ArrayBuffer) {
@@ -98,7 +103,7 @@ struct TaroHybridCore {
         responseWeb.setResponseIsReady(true)
         return responseWeb
       }).catch((err: Error) => {
-        wbLogger.debug("CrossOrigin", 'download error: %{public}s , err is %{public}s', actualRequestUrl, err.message)
+        taroLogger.debug("CrossOrigin", 'download error: %{public}s , err is %{public}s', actualRequestUrl, err.message)
         responseWeb.setResponseCode(0);
         responseWeb.setReasonMessage(err.message);
         responseWeb.setResponseIsReady(true)
@@ -114,6 +119,7 @@ struct TaroHybridCore {
   @Builder
   taroWebLayout(){
     TaroWebContainer({
+      indexHtmlPath: this.indexHtmlPath,
       webUrl: this.webUrl(),
       webUrlPrefix: `${this.domain}/`,
       // want: this.want, // want信息
@@ -124,7 +130,8 @@ struct TaroHybridCore {
       showCapsule: false,
       onNavigationBarBackPressed: this.navigationBarBackPressed,
       hookInterceptorWithoutCache:this.hookInterceptorWithoutCache,
-      isRoot: this.isRoot
+      isRoot: this.isRoot,
+      forceDarkAccess: this.forceDarkAccess
     })
       .width('100%')
       .height('100%')
@@ -132,46 +139,20 @@ struct TaroHybridCore {
 
   @Builder
   debugFrameLayout(){
-    Column(){
-      DebugLayout({
+      DebugTaroWebContainer({
         devDomain: this.devDomain,
         indexHtmlPath: this.indexHtmlPath,
         taroPath: this.taroPath,
         useCache: this.devUseCache,
+        taroWebBuilderParam: ():void=>{this.taroWebLayout()},
         refresh: (domain: string, indexHtmlPath: string, taroPath: string, useCache: boolean)=>{
-          this.debugLayoutVisible = this.debugLayoutVisible == Visibility.Visible ? Visibility.None : Visibility.Visible
-          this.devDomain = domain
           this.devUseCache = useCache
-          this.taroWebController.webController.loadUrl(this.webUrl())
+          this.devDomain = domain
+          setTimeout(() => {
+            this.taroWebController.webController.refresh()
+          }, 50)
         }
       })
-        .height(this.debugLayoutHeight)
-        .width('100%')
-        .backgroundColor("#44bbccaa")
-        .visibility(this.debugLayoutVisible)
-        .position({
-          x: 0,
-          y: this.debugLayoutVisible == Visibility.Visible ? 0 : -this.debugLayoutHeight
-        })
-      Stack({alignContent: Alignment.TopEnd}){
-        this.taroWebLayout()
-        Button(`${this.debugLayoutVisible == Visibility.Visible ? '收起' : '调试'}`,  { type: ButtonType.Capsule, stateEffect: false })
-          .backgroundColor(0x317aff)
-          .height(25)
-          .margin({top: 5, right: 5})
-          .onClick(()=>{
-            this.debugLayoutVisible = this.debugLayoutVisible == Visibility.Visible ? Visibility.None : Visibility.Visible
-          })
-      }
-      .width("100%")
-      .layoutWeight(1)
-      .position({
-        x: 0,
-        y:  this.debugLayoutVisible == Visibility.Visible ? this.debugLayoutHeight : 0
-      })
-    }
-    .width("100%")
-    .height("100%")
   }
 
   build() {

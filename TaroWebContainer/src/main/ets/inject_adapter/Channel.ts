@@ -12,6 +12,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { taroLogger } from '../utils/Logger'
 
 export class Channel {
   // TODO-ly 当前的实现只适合单实例，如果出现多实例Web容器，当前的实现就会有问题
@@ -47,11 +48,20 @@ export class Channel {
 }
 // export const ChannelInstance: Channel = new Channel();
 
+
+
+const PROMISE_STATUS_PENDING = 'pending';
+const PROMISE_STATUS_FULFILLED = 'fulfilled';
+const PROMISE_STATUS_REJECTED = 'rejected';
 export class MethodChannel {
   private ChannelType = 'MethodChannel'
   private listenerMap = new Map()
   private methodPools = new Map<string, (arg: any)=>any>()
   private channel: Channel
+  private promiseStatus = {
+    status: PROMISE_STATUS_PENDING,
+    result: undefined
+  }
 
   // TODO-ly 改为装饰器实现
   registerMethod(methodName: string, fun: (arg: any, objectId?: number)=>any) {
@@ -66,7 +76,10 @@ export class MethodChannel {
       if (typeof method === 'function') {
         // 注册
         let allName:string = `${className}$${methodName}`
-        this.registerMethod(allName, object[methodName])
+        this.registerMethod(allName, (arg: any) => {
+          taroLogger.debug('InvokeNativeApi', allName)
+          return object[methodName].call(null, arg)
+        })
       }
     }
   }
@@ -76,16 +89,20 @@ export class MethodChannel {
     this.channel.registerChannel(this.ChannelType, (object: any)=>{
       return this.call(object)
     })
+    // 注册"GetPromiseStatus"方法
+    this.registerMethod('GetPromiseStatus', (arg: any, objectId?: number)=>{
+      return this.promiseStatus
+    })
   }
 
   call(object): any{
-    const {call, arg} = object
+    const {call, arg, isAsync} = object
     const fun = this.methodPools.get(call)
     if(!fun) {
       return undefined;
     }
 
-    const {isFun, properties, funs, stubId, objectId} = arg
+    const {isFun, properties, funs, stubId} = arg
 
     let argProxy;
     if (stubId == -1) { // 没有回调函数
@@ -120,7 +137,24 @@ export class MethodChannel {
       // arg为对象
       argProxy = argObject;
     }
-    return fun.call(null, argProxy, objectId)
+    const result = fun.call(null, argProxy)
+
+    // 支持Promise返回值
+    if(!isAsync && (result instanceof Promise)) {
+      this.promiseStatus.status = PROMISE_STATUS_PENDING
+      this.promiseStatus.result = undefined
+      result
+        .then((res: any)=>{
+          this.promiseStatus.status = PROMISE_STATUS_FULFILLED
+          this.promiseStatus.result = res
+        })
+        .catch((err: any)=>{
+          this.promiseStatus.status = PROMISE_STATUS_REJECTED
+          this.promiseStatus.result = undefined
+        })
+      return "Promise_Result";
+    }
+    return result;
   }
 }
 

@@ -2,9 +2,10 @@ import http from '@ohos.net.http'
 import { BusinessError } from '@ohos.base';
 import { MiniConfig } from '../bean/MiniConfig'
 import { NetworkTask, NetworkTaskStatus } from '../bean/NetworkTask';
-import { wbLogger } from '../../../utils/Logger';
+import { taroLogger } from '../../../utils/Logger';
 import { UpdateConfig } from '../bean/UpdateConfig';
 import { LocalVersionInfo } from '../bean/LocalVersionInfo';
+import { TaroHybridManager } from '../../../tarohybrid/TaroHybridManager';
 
 interface VersionInfo {
   mini_version?: string;
@@ -22,11 +23,14 @@ export class MiniConfigNetworkDataSource {
     const url = `${UpdateConfig.getInstance().getUrl(localVersion)}`
     const httpRequest = http.createHttp();
     try {
-      wbLogger.debug('network', '%{public}s request', url)
+      taroLogger.debug('network', '%{public}s request', url)
       const response = await httpRequest.request(url, {
-        header: [{ 'Content-Type': 'application/json' }],
+        header: {
+          'Content-Type': 'application/json',
+          'User-Agent': TaroHybridManager.getCustomUserAgent()
+        },
       })
-      wbLogger.debug('network', '%{public}s request complete, result is %{public}s', url, response.result)
+      taroLogger.debug('network', '%{public}s request complete, result is %{public}s', url, response.result)
 
       const result: ResponseResult | undefined = JSON.parse(response.result.toString())
       networkTask.taskStatus = NetworkTaskStatus.READY
@@ -34,7 +38,7 @@ export class MiniConfigNetworkDataSource {
         networkTask.data = new MiniConfig(true, Number.parseInt(result?.data?.mini_version ?? '-1', 10), result?.data?.mini_download_url ?? '');
       }
     } catch (err) {
-      wbLogger.debug('network', '%{public}s request is err, err is %{public}s', url, JSON.stringify(err) ?? '')
+      taroLogger.debug('network', '%{public}s request is err, err is %{public}s', url, JSON.stringify(err) ?? '')
       networkTask.taskStatus = NetworkTaskStatus.FAILED;
     } finally {
       httpRequest.destroy();
@@ -48,11 +52,14 @@ export class MiniConfigNetworkDataSource {
     const url = `${UpdateConfig.getInstance().getUrl(localVersion.toString())}`
     const httpRequest = http.createHttp();
     try {
-      wbLogger.debug('network', '%{public}s request', url)
+      taroLogger.debug('network', '%{public}s request', url)
       const response = await httpRequest.request(url, {
-        header: [{ 'Content-Type': 'application/json' }],
+        header: {
+          'Content-Type': 'application/json',
+          'User-Agent': TaroHybridManager.getCustomUserAgent()
+        },
       })
-      wbLogger.debug('network', '%{public}s request complete, result is %{public}s', url, response.result)
+      taroLogger.debug('network', '%{public}s request complete, result is %{public}s', url, response.result)
 
       const result: ResponseResult | undefined = JSON.parse(response.result.toString())
       networkTask.taskStatus = NetworkTaskStatus.READY
@@ -60,7 +67,7 @@ export class MiniConfigNetworkDataSource {
         networkTask.data = new MiniConfig(true, Number.parseInt(result?.data?.mini_version ?? '-1', 10), result?.data?.mini_download_url ?? '');
       }
     } catch (err) {
-      wbLogger.debug('network', '%{public}s request is err, err is %{public}s', url, JSON.stringify(err) ?? '')
+      taroLogger.debug('network', '%{public}s request is err, err is %{public}s', url, JSON.stringify(err) ?? '')
       networkTask.taskStatus = NetworkTaskStatus.FAILED;
     } finally {
       httpRequest.destroy();

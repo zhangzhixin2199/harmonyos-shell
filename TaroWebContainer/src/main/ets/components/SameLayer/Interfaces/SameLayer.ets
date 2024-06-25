@@ -1,3 +1,51 @@
+export interface anchor {
+  x: number // 锚点X坐标，范围0-1
+  y: number // 锚点Y坐标，范围0-1
+}
+
+export interface marker {
+  latitude: number
+  longitude: number
+  title?: string
+  zIndex?: number // 图标所在层级
+  iconPath?: string // 图标路径
+  rotate?: number // 图标旋转角度
+  alpha?: number // 图标透明度，取值范围为0-1
+  anchor?: anchor
+  width?: number
+  height?: number
+}
+
+@Observed
+export class MapParams {
+  width: number
+  height: number
+  componentId: string
+  latitude: number
+  longitude: number
+  bearing?: number // 旋转角度
+  tilt?: number // 倾斜角度
+  zoom?: number // 缩放级别，取值范围为 3-20, 默认为16，鸿蒙取值范围是2-20
+  minZoom?: number // 最小缩放级别 3-20，鸿蒙取值范围是2-20
+  maxZoom?: number // 最大缩放级别 3-20，鸿蒙取值范围是2-20
+  markers?: marker[]
+  zoomGesturesEnabled?: boolean // 是否支持缩放手势
+  scrollGesturesEnabled?: boolean // 是否支持拖动手势
+  rotateGesturesEnabled?: boolean // 是否支持旋转手势
+  setTrafficEnabled?: boolean // 设置是否显示路况图层
+  compassControlsEnabled?: boolean // 显示指南针
+  scaleControlsEnabled?: boolean // 显示比例尺
+  setMyLocationEnabled?: boolean // 设置是否显示当前定位点
+
+  constructor() {
+    this.width = 0;
+    this.height = 0;
+    this.componentId = '';
+    this.latitude = 0;
+    this.longitude = 0;
+  }
+}
+
 @Observed
 export class VideoParams {
   width: number

@@ -1,6 +1,6 @@
 import zlib from '@ohos.zlib'
 import { BusinessError } from '@ohos.base'
-import { wbLogger } from '../../../utils/Logger'
+import { taroLogger } from '../../../utils/Logger'
 import fs from '@ohos.file.fs'
 import { LocalVersionInfo } from '../bean/LocalVersionInfo'
 import { UpdateConfig } from '../bean/UpdateConfig'
@@ -25,7 +25,7 @@ export class MiniLocalFileDataSource {
           filenames.push(element)
         }
       }
-      wbLogger.debug("LocalUpdateManager", `filenames length is ${filenames.length}`)
+      taroLogger.debug("LocalUpdateManager", `filenames length is ${filenames.length}`)
       let filesLength = filenames.length
       if (filesLength==1) {
         let splits = FileUtils.checkMiniFileNameFormat(filenames[0])
@@ -45,7 +45,7 @@ export class MiniLocalFileDataSource {
         })
         if (filenames.length === 2) {
           //保证在下载前只有一个版本
-          FileUtils.delTempFile(`${miniPath}/${filenames[0]}`)
+          FileUtils.removeFileOrDirSync(`${miniPath}/${filenames[0]}`)
         }
         let splits = filenames[filenames.length-1].split('@');
         if (splits&&splits?.length>1) {
@@ -83,18 +83,18 @@ export class MiniLocalFileDataSource {
 
         zlib.decompressFile(filePath, savePath, options, (errData) => {
           if (errData !== null) {
-            wbLogger.debug("UpdateManager", '%{public}s decompressFile failed. code is %{public}d, message is %{public}s', filePath, errData.code, errData.message)
+            taroLogger.debug("UpdateManager", '%{public}s decompressFile failed. code is %{public}d, message is %{public}s', filePath, errData.code, errData.message)
           } else {
-            wbLogger.debug("UpdateManager", '%{public}s decompressFile success. decompressPath is %{public}s', filePath, savePath)
+            taroLogger.debug("UpdateManager", '%{public}s decompressFile success. decompressPath is %{public}s', filePath, savePath)
           }
-          FileUtils.delTempFile(filePath)
+          FileUtils.removeFileOrDirSync(filePath)
           resolve(errData == null ? savePath : '')
         })
       } catch (errData) {
         let code = (errData as BusinessError).code;
         let message = (errData as BusinessError).message;
-        wbLogger.debug("UpdateManager", '%{public}s decompressFile failed. code is %{public}d, message is %{public}s', filePath, code, message)
-        FileUtils.delTempFile(filePath)
+        taroLogger.debug("UpdateManager", '%{public}s decompressFile failed. code is %{public}d, message is %{public}s', filePath, code, message)
+        FileUtils.removeFileOrDirSync(filePath)
         resolve('')
       }
     })
@@ -119,7 +119,7 @@ export class MiniLocalFileDataSource {
     return fs.accessSync(filePath)
   }
 
-  static getFileOnResponseWeb(dir: string, fileRelatePath: string): WebResourceResponse {
+  static getFileOnResponseWeb(lastVersion: string, dir: string, fileRelatePath: string): WebResourceResponse {
     let filePath = `${dir}/${fileRelatePath}`
 
     const file = fs.openSync(filePath, fs.OpenMode.READ_ONLY);
@@ -127,14 +127,7 @@ export class MiniLocalFileDataSource {
 
     const responseWeb = new WebResourceResponse();
     const headers: Array<Header> = [
-      {
-        headerKey: "Connection",
-        headerValue: "keep-alive"
-      },
-      {
-        headerKey: "Cache-Control",
-        headerValue: "no-cache"
-      }
+      {headerKey: "ResponseDataID", headerValue: lastVersion}
     ]
     let mimeType: string;
     if (filePath.endsWith('.js')) {
@@ -166,6 +159,16 @@ export class MiniLocalFileDataSource {
     responseWeb.setResponseCode(200);
     responseWeb.setReasonMessage('OK');
     return responseWeb
+  }
+
+  static replaceFileContents(diskCachePath: string | undefined, fileRelatePath: string, content: string) {
+    if (!diskCachePath) {
+      return
+    }
+    let filePath = `${diskCachePath}/${fileRelatePath}`
+    const file = fs.openSync(filePath, fs.OpenMode.READ_WRITE);
+    fs.writeSync(file.fd, content)
+    fs.closeSync(file);
   }
 
 }

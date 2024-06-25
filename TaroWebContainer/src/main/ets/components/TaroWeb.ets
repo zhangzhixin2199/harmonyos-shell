@@ -20,7 +20,7 @@ import { switchInternalToHapSandBox } from '../utils/InternalPath';
 import { MiniLocalFileDataSource } from '../data/source/local/MiniLocalFileDataSource';
 import { MiniRawFileDataSource } from '../data/source/local/MiniRawFileDataSource';
 import webview from '@ohos.web.webview';
-import { wbLogger } from '../utils/Logger';
+import { taroLogger } from '../utils/Logger';
 import { LocalUpdateManagerInstance } from '../update/LocalUpdateManager';
 import { AlbumBackward } from '../interfaces/Media'
 import webView from '@ohos.web.webview';
@@ -28,7 +28,11 @@ import { NativeApi } from '../inject_adapter/NativeApi';
 import { Channel, MethodChannel } from '../inject_adapter/Channel';
 import { sameLayerManager } from '../utils/SameLayerManager';
 import { NativeVideoBuilder } from './SameLayer/NativeComponents/Video/Video';
-
+import { NativeMapBuilder } from './SameLayer/NativeComponents/Map/Map';
+import { callMapContextFunction, createMapContext } from '../utils/MapManager';
+import { NativeCacheManager } from '../inject_adapter/NativeCacheManager';
+import { taroTrace, TraceTask } from '../utils/Trace';
+import { registerSceneApis } from '../scene_apis/Index';
 
 const TARO_WEB_TAG = 'TaroWeb';
 
@@ -40,11 +44,17 @@ export class TaroWebController {
   public hasBindedTaroWeb: boolean;
   public callbacks: InterceptRequestHandler[];
   public albumBackward?: AlbumBackward;
+  public nativeCacheManager: NativeCacheManager
 
   constructor() {
     this.webController = new webview.WebviewController();
+    this.nativeCacheManager = new NativeCacheManager()
     this.hasBindedTaroWeb = false;
     this.callbacks = [];
+  }
+
+  getNativeCacheManager(){
+    return this.nativeCacheManager
   }
 
   loadUrl(url: string | Resource, headers?: Array<webview.WebHeader>) {
@@ -56,7 +66,7 @@ export class TaroWebController {
       this.webController.accessBackward();
     } catch(err) {
       const error: BusinessError = err as BusinessError;
-      wbLogger.error(TARO_WEB_TAG, `fail loadUrl, error code: ${error.code}`);
+      taroLogger.error(TARO_WEB_TAG, `fail loadUrl, error code: ${error.code}`);
     }
   }
 
@@ -108,9 +118,12 @@ export struct TaroWeb {
   onTitleReceive?: (title: string) => void;
   hookInterceptorWithoutCache?: (request: WebResourceRequest) => WebResourceResponse | null;
   onRefreshAccessedHistory?: () => void;
+  @Prop indexHtmlPath: string;
   @Prop webUrl: string;
   @Prop webUrlPrefix: string;
   @Prop useCache: boolean;
+  // 是否强制反色适配深色模式
+  @Prop forceDarkAccess: boolean;
   @State componentIdArr: Array<string> = []
   @ObjectLink taroWebController: TaroWebController;
   apiAdapter: ApiAdapter = new ApiAdapter();
@@ -118,7 +131,7 @@ export struct TaroWeb {
   enableWebDebug: boolean = true;
   @Link channel: Channel
   @Link methodChannel: MethodChannel
-  private nativeAPI: NativeApi = new NativeApi()
+  private nativeAPI: NativeApi | undefined = undefined
 
   aboutToAppear() {
     webView.WebviewController.setWebDebuggingAccess(this.enableWebDebug);
@@ -126,10 +139,17 @@ export struct TaroWeb {
     this.taroWebController.addRequestHandler(this.handleInternalResource);
     this.taroWebController.addRequestHandler(this.useLocalCacheResource);
 
+    this.nativeAPI = new NativeApi(this.indexHtmlPath, this.taroWebController)
     this.methodChannel.registerMethods('NativeApi', this.nativeAPI.nativeObj)
+    // 注册场景化API
+    registerSceneApis(this.methodChannel)
 
-    if (!sameLayerManager.isAlreadyRegistered('video')) {
-      sameLayerManager.registerNativeComponentBuilders('video', NativeVideoBuilder)
+    if (!sameLayerManager.isAlreadyRegistered('hos-map')) {
+      sameLayerManager.registerNativeComponentBuilders('hos-map', NativeMapBuilder);
+    }
+
+    if (!sameLayerManager.isAlreadyRegistered('hos-video')) {
+      sameLayerManager.registerNativeComponentBuilders('hos-video', NativeVideoBuilder);
     }
   }
 
@@ -149,10 +169,10 @@ export struct TaroWeb {
         responseWeb.setResponseCode(200);
         responseWeb.setReasonMessage('OK');
         responseWeb.setResponseIsReady(true);
-        wbLogger.info(TARO_WEB_TAG, 'responseWeb for internal resources');
+        taroLogger.info(TARO_WEB_TAG, 'responseWeb for internal resources');
       }
       else {
-        wbLogger.info(TARO_WEB_TAG, 'file resource is not exist');
+        taroLogger.info(TARO_WEB_TAG, 'file resource is not exist');
       }
       return responseWeb;
     }
@@ -164,30 +184,48 @@ export struct TaroWeb {
     if(!this.useCache && this.hookInterceptorWithoutCache != null){
       return this.hookInterceptorWithoutCache(request)
     }
-    //优先使用本地缓存，再使用RawFile缓存，没有则直接网络请求
+
     const url = request.getRequestUrl();
-    if (url && this.useCache && this.webUrlPrefix) {
+    if (url
+      && this.useCache
+      && this.webUrlPrefix
+      && url.startsWith(this.webUrlPrefix)) {
+      // 优先使用本地缓存
+      // 再使用RawFile缓存
+      // 没有则返回空数据，不能让其走网络，因为webUrlPrefix域名为假域名，与微信小程序的机制一样，需要走真实不一样的全路径
+
       // const path: string | undefined = url?.replace(this.webUrlPrefix, '');
       let path: string = url.replace(this.webUrlPrefix, '');
       path = path.split('#')[0]
-      wbLogger.debug('TaroWeb', 'intercepter path=%{public}s', path)
+      taroLogger.debug('TaroWeb', 'intercepter path=%{public}s', path)
       let biz = MiniRawFileDataSource.getBizByPath(path) //获取业务标识
       const lastVerInfo = LocalUpdateManagerInstance.getLastVersionInfo(biz)
-      if (lastVerInfo?.diskCachePath) { // 走本地缓存
-        if (!path || !MiniLocalFileDataSource.fileExist(lastVerInfo?.diskCachePath, path)) {
-          return null;
-        }
-        wbLogger.debug('TaroWeb', 'useLocalCacheResource path=%{public}s', path)
-        return MiniLocalFileDataSource.getFileOnResponseWeb(lastVerInfo?.diskCachePath, path)
+      // 优先走本地缓存，本地缓存不存在，走rawfile
+      if (lastVerInfo?.diskCachePath
+        && path
+        && MiniLocalFileDataSource.fileExist(lastVerInfo?.diskCachePath, path)) {
+        taroLogger.debug('TaroWeb', 'useLocalCacheResource path=%{public}s', path)
+        return MiniLocalFileDataSource.getFileOnResponseWeb(lastVerInfo?.localVersion, lastVerInfo?.diskCachePath, path)
       }
+      // 兜底走rawfile
       if (lastVerInfo?.rawCachePath) { // 走App内置的Raw缓存
         let rawPath = MiniRawFileDataSource.rawfileExist(lastVerInfo.rawCachePath, path)
         if (!path || rawPath.trim() === '') {
           return null;
         }
-        wbLogger.debug('TaroWeb', 'useRawCacheResource path=%{public}s', rawPath)
-        return MiniRawFileDataSource.getRawfileOnResponseWeb(rawPath)
+        taroLogger.debug('TaroWeb', 'useRawCacheResource path=%{public}s', rawPath)
+        return MiniRawFileDataSource.getRawfileOnResponseWeb(lastVerInfo?.localVersion, rawPath)
       }
+
+      // 没有则返回空数据，不能让其走网络，因为webUrlPrefix域名为假域名，与微信小程序的机制一样，需要走真实不一样的全路径
+      const emptyResponse = new WebResourceResponse();
+      emptyResponse.setResponseMimeType("application/octet-stream")
+      emptyResponse.setResponseEncoding('utf-8')
+      emptyResponse.setResponseData(new Uint8Array());
+      emptyResponse.setResponseIsReady(true)
+      emptyResponse.setResponseCode(200);
+      emptyResponse.setReasonMessage('OK');
+      return emptyResponse
     }
     return null;
   }
@@ -213,22 +251,26 @@ export struct TaroWeb {
         .domStorageAccess(true)
         .mixedMode(MixedMode.All)
         .databaseAccess(true)
-        .geolocationAccess(true)
+        .geolocationAccess(false)
         .javaScriptAccess(true)
         .javaScriptProxy({
           object: {
             nativeMethod: (channelType: string, objectJson: string) => {
-              wbLogger.debug('nativeApi', `channelType ${channelType} objectJson(${objectJson})`)
-              return this.channel.call(channelType, objectJson) as object
+              taroLogger.debug('nativeApi', `channelType ${channelType} objectJson(${objectJson})`)
+              taroTrace.startTrace(TraceTask.nativeMethod)
+              const obj = this.channel.call(channelType, objectJson) as object
+              taroTrace.finishTrace(TraceTask.nativeMethod)
+              return obj
             },
-            transferSameLayerArgs: sameLayerManager.transferSameLayerArgs
+            callMapContextFunction: callMapContextFunction,
+            createMapContext: createMapContext,
           },
           name: 'JSBridge',
-          methodList: ['nativeMethod', 'transferSameLayerArgs'],
+          methodList: ['nativeMethod', 'callMapContextFunction', 'createMapContext'],
           controller: this.taroWebController.webController,
         })
         .onConsole((event) => {
-          wbLogger.debug(TARO_WEB_TAG, `${event?.message.getMessage()}`)
+          taroLogger.debug(TARO_WEB_TAG, `${event?.message.getMessage()}`)
           return false
         })
         .zoomAccess(false)
@@ -239,15 +281,15 @@ export struct TaroWeb {
               this.apiAdapter.getRunJavaScript(),
               (error, result) => {
                 if (error) {
-                  wbLogger.error(TARO_WEB_TAG, `Run JavaScript error: ${JSON.stringify(error)}`)
+                  taroLogger.error(TARO_WEB_TAG, `Run JavaScript error: ${JSON.stringify(error)}`)
                   return;
                 }
                 if (result) {
-                  wbLogger.info(TARO_WEB_TAG, `The asFinish() return value is: ${result}`)
+                  taroLogger.info(TARO_WEB_TAG, `The asFinish() return value is: ${result}`)
                 }
               });
           } catch (error) {
-            wbLogger.error(TARO_WEB_TAG, `runJavaScript error: ${(error as BusinessError).message}`);
+            taroLogger.error(TARO_WEB_TAG, `runJavaScript error: ${(error as BusinessError).message}`);
           }
         })
         .onInterceptRequest((event) => { // 当web组件加载url之前触发该回调，用于拦截url并返回响应数据。
@@ -255,19 +297,57 @@ export struct TaroWeb {
           if (!request) {
             return null;
           }
-          return this.taroWebController.interceptRequest(request);
+          taroTrace.startTrace(TraceTask.onInterceptRequest)
+          const response = this.taroWebController.interceptRequest(request);
+          taroTrace.finishTrace(TraceTask.onInterceptRequest)
+          return response
         })
-        .onSslErrorEventReceive((event) => { // 通知用户加载资源时发生SSL错误
-          wbLogger.info(TARO_WEB_TAG, `onSslErrorEventReceive:${event.error}`)
-          event.handler.handleConfirm() // 通知Web组件继续使用SSL证书
-          return true
+        .onPageEnd(()=>{
+          // 端上预渲染的缓存逻辑，暂未完全调通
+          // const url = this.taroWebController.webController.getUrl()
+          // taroLogger.debug('liuyang111', `onPageEnd url is ${url}`)
+          // this.taroWebController.webController.runJavaScript(
+          //   "javascript:document.documentElement.outerHTML;",
+          //   (error, result)=>{
+          //     try {
+          //       let path: string = url.replace(this.webUrlPrefix, '');
+          //       path = path.split('#')[0]
+          //       let biz = MiniRawFileDataSource.getBizByPath(path) //获取业务标识
+          //       const lastVerInfo = LocalUpdateManagerInstance.getLastVersionInfo(biz)
+          //       taroLogger.debug('liuyang111', `html path=${path}, biz=${biz}, lastVerInfo=${JSON.stringify(lastVerInfo)}`)
+          //       const html = result.substring(1, result.length - 1) // JSON字符串返回的是带引号的字符串，需要去除
+          //         // 将转义序列替换为实际字符
+          //         .replaceAll("\\u003C", "<")
+          //         .replaceAll("\\u003E", ">")
+          //         .replaceAll("\\u0026", "&")
+          //         .replaceAll("\\u0027", "'")
+          //         .replaceAll("\\u0022", "\"")
+          //         .replaceAll("\\/", "/")
+          //         .replaceAll("\\\"", "\"")
+          //         .replaceAll("\\n", "\n")
+          //         .replaceAll("\\t", "\t")
+          //           // 去除Java中的转义字符
+          //         .replaceAll("\\\\", "\\");
+          //       MiniLocalFileDataSource.replaceFileContents(lastVerInfo?.diskCachePath, path, html)
+          //       taroLogger.debug('liuyang111', `success`)
+          //     } catch (err) {
+          //       taroLogger.debug('liuyang111', `err ${err}`)
+          //     }
+          //   })
         })
+        // .onSslErrorEventReceive((event) => { // 通知用户加载资源时发生SSL错误
+        //   taroLogger.info(TARO_WEB_TAG, `onSslErrorEventReceive:${event.error}`)
+        //   event.handler.handleConfirm() // 通知Web组件继续使用SSL证书
+        //   return true
+        // })
         .onTitleReceive((event) => {
           this.onTitleReceive && this.onTitleReceive(event?.title ?? '')
         })
         .onRefreshAccessedHistory(() => {
           this.onRefreshAccessedHistory && this.onRefreshAccessedHistory();
         })
+        .darkMode(WebDarkMode.Auto)
+        .forceDarkAccess(this.forceDarkAccess)
       // .webLite(true)  // 需要 osChannel sdk
     }
   }

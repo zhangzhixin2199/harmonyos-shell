@@ -1,61 +1,23 @@
-import { BuilderNode } from '@ohos.arkui.node';
-import { TaroHybridCoreBuilder, TaroHybridCoreBuilderData } from './TaroHybridCore';
 import common from '@ohos.app.ability.common';
 import HashMap from '@ohos.util.HashMap';
 import { TaroHybridUtils } from './TaroHybridUtils';
 import { GlobalThis } from '../utils/GlobalThis';
 import { TaroWebController } from '../components/TaroWeb';
 import { InjectObject } from '../interfaces/InjectObject';
-import { wbLogger } from '../utils/Logger';
+import { taroLogger } from '../utils/Logger';
+import { taroTrace } from '../utils/Trace';
+import { taroStorage } from '../inject_adapter/TaroStorage';
+import { bundleManager } from '@kit.AbilityKit';
+import { TaroHybridCoreInstance } from './TaroHybridCoreInstance';
 
-export class TaroHybridCoreInstance {
-  private builderNode: BuilderNode<TaroHybridCoreBuilderData[]> | undefined
-  builderData: TaroHybridCoreBuilderData
-
-  constructor(domain: string, indexHtmlPath: string, taroPath: string, injectObj: InjectObject) {
-    this.builderData = {
-      domain: domain,
-      indexHtmlPath: indexHtmlPath,
-      taroPath: taroPath,
-      taroWebController: new TaroWebController(),
-      injectObj: injectObj
-    }
-  }
-
-  getBuilderNode(uiContext: UIContext){
-    if (!this.builderNode) {
-      this.builderNode = new BuilderNode(uiContext)
-      this.builderNode.build(
-          wrapBuilder<TaroHybridCoreBuilderData[]>(TaroHybridCoreBuilder),
-          this.builderData
-        )
-      wbLogger.debug(
-        'TaroHybrid',
-        '%{public}s create BuilderNode',
-        [this.builderData.indexHtmlPath]);
-    }
-    return this.builderNode
-  }
-
-  dispose(){
-    if (this.builderNode) {
-      this.builderNode.dispose()
-      this.builderNode = undefined
-
-      wbLogger.debug(
-        'TaroHybrid',
-        '%{public}s dispose BuilderNode',
-        [this.builderData.indexHtmlPath]);
-    }
-  }
-}
 
 export interface TaroHybridManagerOptions {
   uiAbilityContex: common.UIAbilityContext
   domain: string
   injectNativeMethod: (indexHtmlPath: string, uiAbilityContext: common.UIAbilityContext) => InjectObject,
   rootIndexHtmlPath?: string,
-  nativeBack: ()=>void
+  nativeBack: ()=>void,
+  forceDarkAccess: boolean
 }
 
 export class TaroHybridManager {
@@ -63,10 +25,34 @@ export class TaroHybridManager {
   private static builderInstanceMaps: HashMap<string, TaroHybridCoreInstance> = new HashMap();
   // 回收机制：引用计数
   private static referenceCountMap: HashMap<string, number> = new HashMap();
+  // 添加自定义的user-agent
+  private static customUserAgent: string = ''
+  private static debuggable = false
 
   static init(options: TaroHybridManagerOptions){
     TaroHybridManager.options = options
     GlobalThis.getInstance().setContext('context', options.uiAbilityContex);
+    taroStorage.init(options.uiAbilityContex, bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT).name)
+  }
+
+  static setCustomUserAgent(customUserAgent: string){
+    TaroHybridManager.customUserAgent = customUserAgent;
+  }
+  static getCustomUserAgent(): string {
+    return TaroHybridManager.customUserAgent
+  }
+
+  static setDebuggable(debuggable: boolean) {
+    TaroHybridManager.debuggable = debuggable
+    taroLogger.setLoggable(debuggable)
+  }
+
+  static openTrace(){
+    taroTrace.setOpen(true)
+  }
+
+  static getDebuggable() {
+    return TaroHybridManager.debuggable
   }
 
   static isRootContainer(indexHtmlPath: string){
@@ -89,7 +75,8 @@ export class TaroHybridManager {
         TaroHybridManager?.options?.domain??'',
         indexHtmlPath,
         taroPath,
-        TaroHybridManager?.options?.injectNativeMethod(indexHtmlPath, GlobalThis.getInstance().getContext('context') as common.UIAbilityContext) ?? {}
+        TaroHybridManager?.options?.injectNativeMethod(indexHtmlPath, GlobalThis.getInstance().getContext('context') as common.UIAbilityContext) ?? {},
+        TaroHybridManager?.options?.forceDarkAccess?? false
       )
       // 一定要先保存到Map里，再build
       TaroHybridManager.builderInstanceMaps.set(indexHtmlPath, builderInstance)
@@ -116,62 +103,20 @@ export class TaroHybridManager {
   static getCoreInstance(indexHtmlPath: string): TaroHybridCoreInstance | undefined{
     return TaroHybridManager.builderInstanceMaps.get(indexHtmlPath)
   }
-  static loadUrl(indexHtmlPath: string, taroPath: string){
+  static loadUrl(indexHtmlPath: string, taroPath: string): boolean{
     const instance = TaroHybridManager.getCoreInstance(indexHtmlPath)
-    if (!instance) {
-      return ;
-    }
-    const data = instance.builderData
-    let webUrl = `${data.domain}${indexHtmlPath}#${taroPath}`
-    webUrl = TaroHybridUtils.addQueryParamToHash(webUrl, 'from', 'native')
-
-    //如果处于未激活状态loadUrl会失效
-    data.taroWebController.webController.onActive();
-    data.taroWebController.loadUrl(webUrl);
+    instance?.navigateTo(taroPath)
+    // instance存在，说明容器复用，loadUrl成功
+    return instance !== undefined
   }
 
   static nativeBack(){
     TaroHybridManager.options?.nativeBack()
   }
 
-  static onBack(taroWebController: TaroWebController, indexHtmlPath: string, rootTaroPage: string): boolean {
-    // const instance = TaroHybridManager.getCoreInstance(indexHtmlPath)
-    // if (!instance) {
-    //   return false;
-    // }
-    // const data = instance.builderData
-
-    // let controller = data.taroWebController;
-
-    const rootPagePath = `${indexHtmlPath}#${rootTaroPage}`
-
-    let curUrl = taroWebController.webController.getUrl();
-
-    // 当前如果是根页面，即使accessBackward = true，也不返回了，模拟原生的体验
-    if(curUrl.includes(rootPagePath)) {
-      // 回退到原生
-      return false;
-    }
-
-    if (curUrl?.endsWith('?from=native')) {  //web回退到原生
-      // Web先返回
-      if (taroWebController.accessBackward()) {
-        setTimeout(()=>{
-          taroWebController.backward();
-        }, 200)
-      }
-      // 回退到原生
-      return false;
-    }
-
-    if (taroWebController?.accessBackward()) { // web回退
-      taroWebController?.backward();
-      // 保留在当前Web页面
-      return true;
-    }
-
-    // 回退到原生
-    return false;
+  static onBack(indexHtmlPath: string, rootTaroPage: string): boolean {
+    const instance = TaroHybridManager.getCoreInstance(indexHtmlPath)
+    return instance?.navigateBack(rootTaroPage) ?? false;
   }
 
 }
